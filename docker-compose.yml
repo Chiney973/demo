@@ -1,0 +1,106 @@
+version: "3.9"
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_DB=dev-file
+    ports:
+      - 8080:8080
+    command:
+      - start-dev
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  apisix:
+    image: apache/apisix:latest
+    container_name: apisix
+    environment:
+      - APISIX_DASHBOARD_USER=admin
+      - APISIX_DASHBOARD_PASSWORD=admin
+    ports:
+      - 9080:9080 # HTTP port
+      - 9443:9443 # HTTPS port
+      - 9180:9180
+    depends_on:
+      - keycloak
+      - etcd
+    volumes:
+      - ./apisix_config/config.yaml:/usr/local/apisix/conf/config.yaml
+
+  etcd:
+    image: bitnami/etcd:latest
+    container_name: etcd
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+    ports:
+      - 2379:2379 # ETCD client port
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - 6379:6379
+    command: redis-server
+
+  api-1:
+    build:
+      context: ./api_1
+    container_name: api_1
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    ports:
+      - 8001:8000
+    volumes:
+      - ./api_1:/app 
+    command: >
+      sh -c "python manage.py migrate &&
+             daphne -b 0.0.0.0 -p 8000 api_1.asgi:application"
+
+  api-2:
+    build:
+      context: ./api_2
+    container_name: api_2
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    ports:
+      - 8002:8000
+    volumes:
+      - ./api_2:/app 
+    command: >
+      sh -c "python manage.py migrate &&
+             daphne -b 0.0.0.0 -p 8000 api_2.asgi:application"
+
+  authz:
+    build:
+      context: ./authz
+    container_name: authz
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    ports:
+      - 8003:8000
+    volumes:
+      - ./authz:/app 
+    command: >
+      sh -c "python manage.py migrate &&
+             daphne -b 0.0.0.0 -p 8000 authz.asgi:application"
+
+# daphne -b 0.0.0.0 -p 8000 api_2.asgi:application
+# python manage.py runserver 0.0.0.0:8000
